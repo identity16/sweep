@@ -32,6 +32,12 @@ Contributions are welcome! To contribute, please visit [our issues page](https:/
 
 ## License
 
-The license for sweep-sdk has not been specified. Please confirm with the project maintainers for the correct licensing information.# Sweep SDK
+The license for sweep-sdk has not been specified. Please confirm with the project maintainers for the correct licensing information.
+
+# Class Descriptions
+
+For detailed descriptions and diagrams of the classes in `sweep-sdk`, please see the [`CLASS_DESCRIPTIONS.md`](CLASS_DESCRIPTIONS.md) file.
+
+# Sweep SDK
 
 Library for building LLM agents.
