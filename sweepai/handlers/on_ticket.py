@@ -172,10 +172,14 @@ def on_ticket(
     with logger.contextualize(
         tracking_id=tracking_id,
     ):
+        # tracking_id가 없다면, 해시로 할당
         if tracking_id is None:
             tracking_id = get_hash()
+
         on_ticket_start_time = time()
         logger.info(f"Starting on_ticket with title {title} and summary {summary}")
+        
+        # Title에서 정보 추출
         (
             title,
             slow_mode,
@@ -204,7 +208,8 @@ def on_ticket(
             logger.add(handler)
 
         fire_and_forget_wrapper(initialize_logtail_context)()
-
+        
+        # 이슈 summary 정리
         summary = summary or ""
         summary = re.sub(
             "<details (open)?>(\r)?\n<summary>Checklist</summary>.*",
@@ -219,7 +224,7 @@ def on_ticket(
         summary = re.sub("\n\n", "\n", summary, flags=re.DOTALL)
 
         repo_name = repo_full_name
-        user_token, g = get_github_client(installation_id)
+        _, g = get_github_client(installation_id)
         repo = g.get_repo(repo_full_name)
         current_issue: Issue = repo.get_issue(number=issue_number)
         assignee = current_issue.assignee.login if current_issue.assignee else None
@@ -243,6 +248,7 @@ def on_ticket(
                 start_time=int(time()),
             ),
         )
+        # "branch:"로 정의된 브랜치명에 맞는 브랜치 가져오기
         branch_match = re.search(r"([B|b]ranch:) *(?P<branch_name>.+?)(\n|$)", summary)
         overrided_branch_name = None
         if branch_match and "branch_name" in branch_match.groupdict():
@@ -388,6 +394,7 @@ def on_ticket(
             fire_and_forget_wrapper(delete_old_prs)()
 
             if not sandbox_mode:
+                # Default 모드에서는 Search -> Code -> Review 순서로 실행
                 progress_headers = [
                     None,
                     "Step 1: 🔎 Searching",
@@ -395,6 +402,7 @@ def on_ticket(
                     "Step 3: 🔁 Code Review",
                 ]
             else:
+                # Sandbox 모드에서는 Reading File -> Excuting Sandbox 순서로 실행
                 progress_headers = [
                     None,
                     "📖 Reading File",
@@ -724,6 +732,7 @@ def on_ticket(
                 )
 
             try:
+                # 관련 있는 파일 가져오기
                 snippets, tree, _ = fetch_relevant_files(
                     cloned_repo,
                     title,

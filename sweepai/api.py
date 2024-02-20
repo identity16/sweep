@@ -413,30 +413,42 @@ def run(request_dict, event):
 
     with logger.contextualize(tracking_id="main", env=ENV):
         match event, action:
+            # 커밋의 체크가 다 돌았을 때
             case "check_run", "completed":
                 request = CheckRunCompleted(**request_dict)
                 _, g = get_github_client(request.installation.id)
                 repo = g.get_repo(request.repository.full_name)
+
+                # 체크와 연동된 PR 가져오기
                 pull_requests = request.check_run.pull_requests
+
                 if pull_requests:
-                    logger.info(pull_requests[0].number)
-                    pr = repo.get_pull(pull_requests[0].number)
+                    pull_request = pull_requests[0]
+                    logger.info(pull_request.number)
+                    # PR 데이터 불러오기
+                    pr = repo.get_pull(pull_request.number)
+
+                    # PR이 생성된 지 1시간이 지났고, "[Sweep Rules]" 또는 "[Sweep GHA Fix]"로 시작한다면
                     if (time.time() - pr.created_at.timestamp()) > 60 * 60 and (
                         pr.title.startswith("[Sweep Rules]")
                         or pr.title.startswith("[Sweep GHA Fix]")
                     ):
+                        # 해당 PR의 최신 커밋에 대한 check_suite를 가져와서
                         after_sha = pr.head.sha
                         commit = repo.get_commit(after_sha)
                         check_suites = commit.get_check_suites()
+                        
+                        # 하나라도 실패한 check가 있다면, PR close
                         for check_suite in check_suites:
                             if check_suite.conclusion == "failure":
                                 pr.edit(state="closed")
                                 break
+
                     if (
-                        not (time.time() - pr.created_at.timestamp()) > 60 * 15
-                        and request.check_run.conclusion == "failure"
-                        and pr.state == "open"
-                        and get_gha_enabled(repo)
+                        not (time.time() - pr.created_at.timestamp()) > 60 * 15 # PR이 생성된 지 15분 이내이고,
+                        and request.check_run.conclusion == "failure" # check가 실패했고
+                        and pr.state == "open" # 현재 열려있는 PR이며
+                        and get_gha_enabled(repo) # Github Actions가 활성화 되어 있으며
                         and len(
                             [
                                 comment
@@ -444,8 +456,8 @@ def run(request_dict, event):
                                 if "Fixing PR" in comment.body
                             ]
                         )
-                        < 2
-                        and GHA_AUTOFIX_ENABLED
+                        < 2 # "Fixing PR"이 포함된 Comment가 없거나 1개이고,
+                        and GHA_AUTOFIX_ENABLED # Github Action Auto Fix가 활성화되어 있는 경우.
                     ):
                         # check if the base branch is passing
                         commits = repo.get_commits(sha=pr.base.ref)
@@ -484,6 +496,7 @@ def run(request_dict, event):
                                     "success": False,
                                     "error_message": "Disabled for free users",
                                 }
+                            # [Sweep GHA Fix] prefix가 붙은 PR 추가
                             stack_pr(
                                 request=f"[Sweep GHA Fix] The GitHub Actions run failed on {request.check_run.head_sha[:7]} ({repo.default_branch}) with the following error logs:\n\n```\n\n{logs}\n\n```",
                                 pr_number=pr.number,
@@ -493,17 +506,20 @@ def run(request_dict, event):
                                 tracking_id=tracking_id,
                                 commit_hash=pr.head.sha,
                             )
+                # PR이 없으면서, HEAD 브랜치가 default 브랜치이고, GHA Auto Fix가 활성화되어 있을 때
                 elif (
                     request.check_run.check_suite.head_branch == repo.default_branch
                     and get_gha_enabled(repo)
                     and GHA_AUTOFIX_ENABLED
                 ):
+                    # 최근 Default 브랜치 커밋의 체크가 실패했다면
                     if request.check_run.conclusion == "failure":
                         commit = repo.get_commit(request.check_run.head_sha)
                         attributor = request.sender.login
                         if attributor.endswith("[bot]"):
                             attributor = commit.author.login
                         if attributor.endswith("[bot]"):
+                            # 에러 메시지 리턴
                             return {
                                 "success": False,
                                 "error_message": "The PR was created by a bot, so I won't attempt to fix it.",
@@ -513,7 +529,7 @@ def run(request_dict, event):
                             request.check_run.run_id,
                             request.installation.id,
                         )
-                        logs, user_message = clean_logs(logs)
+                        logs, _ = clean_logs(logs)
                         chat_logger = ChatLogger(
                             data={
                                 "username": attributor,
@@ -525,6 +541,8 @@ def run(request_dict, event):
                                 "success": False,
                                 "error_message": "Disabled for free users",
                             }
+                        
+                        # [Sweep GHA Fix] prefix가 붙은 PR 추가
                         make_pr(
                             title=f"[Sweep GHA Fix] Fix the failing GitHub Actions on {request.check_run.head_sha[:7]} ({repo.default_branch})",
                             repo_description=repo.description,
@@ -593,9 +611,11 @@ def run(request_dict, event):
                         installation_id=request_dict["installation"]["id"],
                         tracking_id=get_hash(),
                     )
+            # 이슈가 열렸을 때
             case "issues", "opened":
                 request = IssueRequest(**request_dict)
                 issue_title_lower = request.issue.title.lower()
+                # 이슈 제목이 "sweep"으로 시작하거나 "sweep:"이 들어있다면,
                 if (
                     issue_title_lower.startswith("sweep")
                     or "sweep:" in issue_title_lower
@@ -606,12 +626,15 @@ def run(request_dict, event):
                     labels = repo.get_labels()
                     label_names = [label.name for label in labels]
 
+                    # sweep label이 없다면 생성
                     if GITHUB_LABEL_NAME not in label_names:
                         repo.create_label(
                             name=GITHUB_LABEL_NAME,
                             color=GITHUB_LABEL_COLOR,
                             description=GITHUB_LABEL_DESCRIPTION,
                         )
+                    
+                    # 이슈에 sweep label 추가
                     current_issue = repo.get_issue(number=request.issue.number)
                     current_issue.add_to_labels(GITHUB_LABEL_NAME)
             case "issue_comment", "edited":
@@ -721,8 +744,10 @@ def run(request_dict, event):
                             },
                         )
                         call_on_comment(**pr_change_request.params)
+            # 이슈가 수정되었을 때,
             case "issues", "edited":
                 request = IssueRequest(**request_dict)
+                # sweep label이 붙어있다면
                 if (
                     GITHUB_LABEL_NAME
                     in [label.name.lower() for label in request.issue.labels]
